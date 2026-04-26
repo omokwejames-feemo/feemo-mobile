@@ -2,6 +2,7 @@
   "expo": {
     "name": "Feemo Budget",
     "slug": "feemo-mobile",
+    "owner": "jamesomokwe",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -20,7 +21,9 @@
         "NSCameraUsageDescription": "Used to scan QR codes for offline project transfer.",
         "CFBundleURLTypes": [
           {
-            "CFBundleURLSchemes": ["feemobudget"]
+            "CFBundleURLSchemes": [
+              "feemobudget"
+            ]
           }
         ]
       }
@@ -37,8 +40,15 @@
         {
           "action": "VIEW",
           "autoVerify": true,
-          "data": [{ "scheme": "feemobudget" }],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "data": [
+            {
+              "scheme": "feemobudget"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
@@ -52,14 +62,19 @@
       [
         "expo-build-properties",
         {
-          "ios": { "deploymentTarget": "15.1" },
-          "android": { "compileSdkVersion": 35, "targetSdkVersion": 35 }
+          "ios": {
+            "deploymentTarget": "15.1"
+          },
+          "android": {
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35
+          }
         }
       ]
     ],
     "extra": {
       "eas": {
-        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+        "projectId": "b76378c9-38b9-4046-91cc-a017eac494a1"
       }
     }
   }
