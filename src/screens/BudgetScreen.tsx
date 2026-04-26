@@ -10,9 +10,11 @@ import {
 import { useBudgetStore, DEPARTMENTS } from '../store/budgetStore'
 import { formatCurrency } from '../utils/formatCurrency'
 import { colors, spacing, radius, font } from '../utils/theme'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Header from '../components/Header'
 
 export default function BudgetScreen() {
+  const insets = useSafeAreaInsets()
   const { project, deptAllocations, setDeptAllocation } = useBudgetStore()
   const [search, setSearch] = useState('')
   const [editingCode, setEditingCode] = useState<string | null>(null)
@@ -41,7 +43,7 @@ export default function BudgetScreen() {
   }
 
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { paddingTop: insets.top }]}>
       <Header
         title="Budget"
         subtitle={project.title}

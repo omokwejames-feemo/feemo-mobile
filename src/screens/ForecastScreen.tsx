@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react'
 import { View, Text, ScrollView, StyleSheet } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useBudgetStore, DEPARTMENTS } from '../store/budgetStore'
 import { formatCurrency } from '../utils/formatCurrency'
 import { colors, spacing, radius, font } from '../utils/theme'
@@ -15,6 +16,7 @@ interface MonthData {
 }
 
 export default function ForecastScreen() {
+  const insets = useSafeAreaInsets()
   const { project, timeline, deptAllocations, expenditureDeductions } = useBudgetStore()
 
   const months = useMemo<MonthData[]>(() => {
@@ -54,7 +56,7 @@ export default function ForecastScreen() {
   const maxValue = Math.max(...months.map((m) => Math.max(m.budgeted, m.spent)), 1)
 
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { paddingTop: insets.top }]}>
       <Header
         title="Forecast"
         subtitle="Monthly cashflow view"
