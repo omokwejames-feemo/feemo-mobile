@@ -10,11 +10,10 @@ import {
 import { useBudgetStore, DEPARTMENTS } from '../store/budgetStore'
 import { formatCurrency } from '../utils/formatCurrency'
 import { colors, spacing, radius, font } from '../utils/theme'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import Header from '../components/Header'
 
 export default function BudgetScreen() {
-  const insets = useSafeAreaInsets()
   const { project, deptAllocations, setDeptAllocation } = useBudgetStore()
   const [search, setSearch] = useState('')
   const [editingCode, setEditingCode] = useState<string | null>(null)
@@ -43,7 +42,7 @@ export default function BudgetScreen() {
   }
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
+    <SafeAreaView style={styles.root} edges={['top']}>
       <Header
         title="Budget"
         subtitle={project.title}
@@ -174,7 +173,7 @@ export default function BudgetScreen() {
         })}
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
-    </View>
+    </SafeAreaView>
   )
 }
 

@@ -10,7 +10,7 @@ import {
 } from 'react-native'
 import { useBudgetStore } from '../store/budgetStore'
 import { colors, spacing, radius, font } from '../utils/theme'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import Header from '../components/Header'
 import { useGoogleSignIn, loadTokens, clearTokens, getValidAccessToken } from '../utils/googleAuth'
 import { pullFromDrive, pushToDrive } from '../utils/driveSync'
@@ -39,7 +39,6 @@ const PLATFORM_COLORS: Record<string, string> = {
 }
 
 export default function SyncScreen() {
-  const insets = useSafeAreaInsets()
   const { sync, project, setSync, loadFromDesktopExport } = useBudgetStore()
   const [status, setStatus] = useState<SyncStatus>('idle')
   const [errorMsg, setErrorMsg] = useState('')
@@ -147,7 +146,7 @@ export default function SyncScreen() {
   }
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
+    <SafeAreaView style={styles.root} edges={['top']}>
       <Header title="Sync" subtitle="Desktop ↔ Mobile" />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -289,7 +288,7 @@ export default function SyncScreen() {
 
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
-    </View>
+    </SafeAreaView>
   )
 }
 

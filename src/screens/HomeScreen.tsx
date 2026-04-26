@@ -5,15 +5,13 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
 } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useBudgetStore } from '../store/budgetStore'
 import { formatCurrency } from '../utils/formatCurrency'
 import { colors, spacing, radius, font } from '../utils/theme'
 
 export default function HomeScreen() {
-  const insets = useSafeAreaInsets()
   const { project, timeline, sync, deptAllocations } = useBudgetStore()
 
   const totalPhaseMonths =
@@ -25,8 +23,7 @@ export default function HomeScreen() {
   const allocatedPct = Object.values(deptAllocations).reduce((a, b) => a + b, 0)
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
+    <SafeAreaView style={styles.root} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
         {/* Hero project card */}
@@ -143,7 +140,7 @@ export default function HomeScreen() {
         </View>
 
       </ScrollView>
-    </View>
+    </SafeAreaView>
   )
 }
 

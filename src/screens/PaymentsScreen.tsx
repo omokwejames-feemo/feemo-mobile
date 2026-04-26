@@ -1,6 +1,6 @@
 import React from 'react'
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { useBudgetStore } from '../store/budgetStore'
 import { formatCurrency } from '../utils/formatCurrency'
 import { colors, spacing, radius, font } from '../utils/theme'
@@ -19,7 +19,6 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 export default function PaymentsScreen() {
-  const insets = useSafeAreaInsets()
   const { project, paymentSchedules, expenditureDeductions } = useBudgetStore()
 
   const totalScheduled = paymentSchedules.reduce(
@@ -34,7 +33,7 @@ export default function PaymentsScreen() {
   const hasSchedules = paymentSchedules.length > 0
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
+    <SafeAreaView style={styles.root} edges={['top']}>
       <Header
         title="Payments"
         subtitle={`${paymentSchedules.length} schedule${paymentSchedules.length !== 1 ? 's' : ''}`}
@@ -131,7 +130,7 @@ export default function PaymentsScreen() {
         )}
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
-    </View>
+    </SafeAreaView>
   )
 }
 
