@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build Android APK
+        id: build_android
+        run: |
+          BUILD_URL=$(eas build --platform android --profile preview --non-interactive --json | jq -r '.[0].artifacts.buildUrl // empty')
+          echo "android_url=$BUILD_URL" >> $GITHUB_OUTPUT
+        env:
+          EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: ${{ secrets.GOOGLE_ANDROID_CLIENT_ID }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Feemo Budget ${{ github.ref_name }}
+          body: |
+            ## Feemo Budget Mobile ${{ github.ref_name }}
+
+            ### Install on Android
+            Download the APK below and install directly.
+            > Enable "Install from unknown sources" in Android Settings → Security.
+
+            ### Install on iOS
+            Use **Expo Go** to load the app:
+            1. Install [Expo Go](https://apps.apple.com/app/expo-go/id982107779) from the App Store
+            2. Open Expo Go and scan the QR from the build dashboard
+
+            ### Google Drive Sync setup
+            1. Open Feemo Budget Manager on desktop → File screen → Save to Google Drive
+            2. Open this mobile app → Sync tab → Connect Google Drive (use the same account)
+
+            ---
+            Built with [EAS](https://expo.dev/eas) · Android APK: ${{ steps.build_android.outputs.android_url }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
