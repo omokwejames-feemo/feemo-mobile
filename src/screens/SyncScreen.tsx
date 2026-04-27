@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   View,
   Text,
@@ -7,16 +7,21 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  TextInput,
 } from 'react-native'
 import { useBudgetStore } from '../store/budgetStore'
 import { colors, spacing, radius, font } from '../utils/theme'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import Header from '../components/Header'
-import { useGoogleSignIn, loadTokens, clearTokens, getValidAccessToken } from '../utils/googleAuth'
+import { useGoogleSignIn, loadTokens, clearTokens } from '../utils/googleAuth'
 import { pullFromDrive, pushToDrive } from '../utils/driveSync'
+import { onFeemoAuthChange, signInWithEmail, signUpWithEmail, signOutFeemo } from '../utils/feemoAuth'
+import type { FeemoUser } from '../utils/feemoAuth'
+import { pullFromCloud, pushToCloud, subscribeToCloud } from '../utils/feemoSync'
 
 type SyncStatus = 'idle' | 'signing_in' | 'pulling' | 'pushing' | 'success' | 'error'
 
+// ─── Google Drive workflow steps (kept for reference section) ────────────────
 interface WorkflowStep {
   icon: string
   title: string
@@ -40,77 +45,213 @@ const PLATFORM_COLORS: Record<string, string> = {
 
 export default function SyncScreen() {
   const { sync, project, setSync, loadFromDesktopExport } = useBudgetStore()
-  const [status, setStatus] = useState<SyncStatus>('idle')
-  const [errorMsg, setErrorMsg] = useState('')
-  const [isSignedIn, setIsSignedIn] = useState(false)
-  const [lastSyncLabel, setLastSyncLabel] = useState('')
 
-  const { signIn } = useGoogleSignIn()
+  // ── Feemo Account state ──────────────────────────────────────────────────────
+  const [user, setUser] = useState<FeemoUser | null>(null)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin')
+  const [feemoSyncing, setFeemoSyncing] = useState(false)
+  const [feemoError, setFeemoError] = useState('')
+  const [lastSync, setLastSync] = useState<string | null>(null)
+  const cloudUnsubRef = useRef<(() => void) | null>(null)
 
-  // Check token on mount
+  // ── Google Drive state ───────────────────────────────────────────────────────
+  const [driveStatus, setDriveStatus] = useState<SyncStatus>('idle')
+  const [driveError, setDriveError] = useState('')
+  const [isDriveSignedIn, setIsDriveSignedIn] = useState(false)
+  const [lastDriveSyncLabel, setLastDriveSyncLabel] = useState('')
+
+  const { signIn: googleSignIn } = useGoogleSignIn()
+
+  // ── Auth listener ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    loadTokens().then(t => setIsSignedIn(!!t))
+    const unsub = onFeemoAuthChange((u) => setUser(u))
+    return unsub
+  }, [])
+
+  // ── Cloud subscription when signed in ────────────────────────────────────────
+  useEffect(() => {
+    // Clean up any existing subscription
+    if (cloudUnsubRef.current) {
+      cloudUnsubRef.current()
+      cloudUnsubRef.current = null
+    }
+
+    if (!user) return
+
+    cloudUnsubRef.current = subscribeToCloud(user.uid, (data) => {
+      if (!data) return
+      const docData = data as {
+        state?: Record<string, unknown>
+        updatedBy?: string
+        updatedAt?: { toDate?: () => Date }
+      }
+      // Only auto-load if the push came from desktop
+      if (docData.state && docData.updatedBy !== 'mobile') {
+        loadFromDesktopExport(docData.state as Parameters<typeof loadFromDesktopExport>[0])
+        const ts = docData.updatedAt?.toDate?.()
+        if (ts) {
+          setLastSync(ts.toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' }))
+        }
+      }
+    })
+
+    return () => {
+      cloudUnsubRef.current?.()
+      cloudUnsubRef.current = null
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid])
+
+  // ── Google Drive token check ──────────────────────────────────────────────────
+  useEffect(() => {
+    loadTokens().then((t) => setIsDriveSignedIn(!!t))
   }, [])
 
   useEffect(() => {
     if (sync.lastSyncedAt) {
-      setLastSyncLabel(new Date(sync.lastSyncedAt).toLocaleString('en-NG', {
-        dateStyle: 'medium', timeStyle: 'short',
-      }))
+      setLastDriveSyncLabel(
+        new Date(sync.lastSyncedAt).toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' }),
+      )
     }
   }, [sync.lastSyncedAt])
 
-  async function handleSignIn() {
-    setStatus('signing_in')
+  // ── Feemo Account handlers ────────────────────────────────────────────────────
+  async function handleFeemoAuth() {
+    if (!email.trim() || !password.trim()) {
+      setFeemoError('Email and password are required.')
+      return
+    }
+    setFeemoSyncing(true)
+    setFeemoError('')
     try {
-      const tokens = await signIn()
-      if (!tokens) { setStatus('idle'); return }
-      setIsSignedIn(true)
-      setStatus('idle')
-    } catch (e: any) {
-      setStatus('error')
-      setErrorMsg(e?.message ?? 'Sign-in failed')
+      if (mode === 'signin') {
+        await signInWithEmail(email.trim(), password)
+      } else {
+        await signUpWithEmail(email.trim(), password)
+      }
+      setEmail('')
+      setPassword('')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('user-not-found') || msg.includes('wrong-password') || msg.includes('invalid-credential')) {
+        setFeemoError('Invalid email or password.')
+      } else if (msg.includes('email-already-in-use')) {
+        setFeemoError('An account with this email already exists.')
+      } else if (msg.includes('weak-password')) {
+        setFeemoError('Password must be at least 6 characters.')
+      } else if (msg.includes('invalid-email')) {
+        setFeemoError('Please enter a valid email address.')
+      } else {
+        setFeemoError(msg)
+      }
+    } finally {
+      setFeemoSyncing(false)
     }
   }
 
-  async function handleSignOut() {
+  async function handleFeemoSignOut() {
+    await signOutFeemo()
+    setLastSync(null)
+  }
+
+  async function handleFeemoPull() {
+    if (!user) return
+    setFeemoSyncing(true)
+    setFeemoError('')
+    try {
+      const result = await pullFromCloud(user.uid)
+      if (!result.success) {
+        setFeemoError(result.error ?? 'Pull failed.')
+        return
+      }
+      if (!result.data) {
+        Alert.alert('No data', 'No project found in the cloud yet. Push from the desktop first.')
+        return
+      }
+      loadFromDesktopExport(result.data as Parameters<typeof loadFromDesktopExport>[0])
+      const now = new Date().toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' })
+      setLastSync(now)
+      Alert.alert('Sync Complete', 'Latest desktop project loaded.')
+    } catch (err) {
+      setFeemoError(err instanceof Error ? err.message : 'Pull failed.')
+    } finally {
+      setFeemoSyncing(false)
+    }
+  }
+
+  async function handleFeemoPush() {
+    if (!user) return
+    setFeemoSyncing(true)
+    setFeemoError('')
+    try {
+      const s = useBudgetStore.getState()
+      const state = {
+        project: s.project,
+        timeline: s.timeline,
+        deptAllocations: s.deptAllocations,
+        paymentSchedules: s.paymentSchedules,
+        expenditureDeductions: s.expenditureDeductions,
+      }
+      const result = await pushToCloud(user.uid, state as Record<string, unknown>, 'mobile')
+      if (!result.success) {
+        setFeemoError(result.error ?? 'Push failed.')
+        return
+      }
+      const now = new Date().toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' })
+      setLastSync(now)
+      Alert.alert('Upload Complete', 'Your project has been saved to the cloud.')
+    } catch (err) {
+      setFeemoError(err instanceof Error ? err.message : 'Push failed.')
+    } finally {
+      setFeemoSyncing(false)
+    }
+  }
+
+  // ── Google Drive handlers ─────────────────────────────────────────────────────
+  async function handleDriveSignIn() {
+    setDriveStatus('signing_in')
+    try {
+      const tokens = await googleSignIn()
+      if (!tokens) { setDriveStatus('idle'); return }
+      setIsDriveSignedIn(true)
+      setDriveStatus('idle')
+    } catch (e: unknown) {
+      setDriveStatus('error')
+      setDriveError(e instanceof Error ? e.message : 'Sign-in failed')
+    }
+  }
+
+  async function handleDriveSignOut() {
     await clearTokens()
-    setIsSignedIn(false)
+    setIsDriveSignedIn(false)
     setSync({ lastSyncedAt: null, syncSource: null, driveFileId: null })
   }
 
   async function handlePullFromDrive() {
-    if (!isSignedIn) { await handleSignIn(); return }
-    setStatus('pulling')
-    setErrorMsg('')
+    if (!isDriveSignedIn) { await handleDriveSignIn(); return }
+    setDriveStatus('pulling')
+    setDriveError('')
     try {
       const result = await pullFromDrive()
-      // Merge the downloaded state into local store
-      loadFromDesktopExport(result.data as any)
-      setSync({
-        lastSyncedAt: new Date().toISOString(),
-        syncSource: 'google_drive',
-        driveFileId: result.fileId,
-      })
-      setStatus('success')
+      loadFromDesktopExport(result.data as Parameters<typeof loadFromDesktopExport>[0])
+      setSync({ lastSyncedAt: new Date().toISOString(), syncSource: 'google_drive', driveFileId: result.fileId })
+      setDriveStatus('success')
       Alert.alert('Sync Complete', `Loaded "${result.fileName}" from Google Drive.`)
-    } catch (e: any) {
-      setStatus('error')
-      if (e?.message === 'NOT_AUTHENTICATED') {
-        setIsSignedIn(false)
-        setErrorMsg('Session expired. Please sign in again.')
-      } else if (e?.message === 'NO_FILES') {
-        setErrorMsg('No .feemo files found in your Drive. Save a project from the desktop app first.')
-      } else {
-        setErrorMsg(e?.message ?? 'Sync failed. Check your connection and try again.')
-      }
+    } catch (e: unknown) {
+      setDriveStatus('error')
+      const msg = e instanceof Error ? e.message : ''
+      if (msg === 'NOT_AUTHENTICATED') { setIsDriveSignedIn(false); setDriveError('Session expired. Please sign in again.') }
+      else if (msg === 'NO_FILES') { setDriveError('No .feemo files found in your Drive. Save a project from the desktop app first.') }
+      else { setDriveError(msg || 'Sync failed. Check your connection and try again.') }
     }
   }
 
   async function handlePushToDrive() {
-    if (!isSignedIn) { await handleSignIn(); return }
-    setStatus('pushing')
-    setErrorMsg('')
+    if (!isDriveSignedIn) { await handleDriveSignIn(); return }
+    setDriveStatus('pushing')
+    setDriveError('')
     try {
       const state = useBudgetStore.getState()
       const exportData = {
@@ -121,28 +262,20 @@ export default function SyncScreen() {
         expenditureDeductions: state.expenditureDeductions,
       }
       const fileId = await pushToDrive(state.project.title, exportData, sync.driveFileId)
-      setSync({
-        lastSyncedAt: new Date().toISOString(),
-        syncSource: 'google_drive',
-        driveFileId: fileId,
-      })
-      setStatus('success')
+      setSync({ lastSyncedAt: new Date().toISOString(), syncSource: 'google_drive', driveFileId: fileId })
+      setDriveStatus('success')
       Alert.alert('Upload Complete', 'Your project has been saved to Google Drive.')
-    } catch (e: any) {
-      setStatus('error')
-      setErrorMsg(e?.message ?? 'Upload failed.')
+    } catch (e: unknown) {
+      setDriveStatus('error')
+      setDriveError(e instanceof Error ? e.message : 'Upload failed.')
     }
   }
 
-  const isBusy = status === 'signing_in' || status === 'pulling' || status === 'pushing'
+  const isDriveBusy = driveStatus === 'signing_in' || driveStatus === 'pulling' || driveStatus === 'pushing'
 
-  const statusLabel: Record<SyncStatus, string> = {
-    idle:       '',
-    signing_in: 'Connecting to Google…',
-    pulling:    'Downloading from Drive…',
-    pushing:    'Uploading to Drive…',
-    success:    '',
-    error:      errorMsg,
+  const driveStatusLabel: Record<SyncStatus, string> = {
+    idle: '', signing_in: 'Connecting to Google…', pulling: 'Downloading from Drive…',
+    pushing: 'Uploading to Drive…', success: '', error: driveError,
   }
 
   return (
@@ -151,87 +284,137 @@ export default function SyncScreen() {
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
-        {/* Auth + status card */}
-        <View style={styles.statusCard}>
-          <View style={styles.statusRow}>
-            <View style={[styles.statusDot, {
-              backgroundColor: isSignedIn
-                ? (sync.lastSyncedAt ? colors.success : colors.primary)
-                : colors.warning,
-            }]} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.statusTitle}>
-                {isSignedIn
-                  ? (sync.lastSyncedAt ? 'Google Drive connected' : 'Signed in — not yet synced')
-                  : 'Not connected to Google Drive'}
-              </Text>
-              <Text style={styles.statusSub}>
-                {isSignedIn && sync.lastSyncedAt
-                  ? `Last sync: ${lastSyncLabel}`
-                  : isSignedIn
-                  ? 'Ready to sync'
-                  : 'Sign in to pull your desktop project'}
-              </Text>
-            </View>
-            {isSignedIn && (
-              <TouchableOpacity onPress={handleSignOut} style={styles.signOutBtn}>
+        {/* ── FEEMO ACCOUNT SECTION ─────────────────────────────────────────── */}
+        <Text style={styles.sectionLabel}>Feemo Account Sync</Text>
+
+        {user ? (
+          /* Signed-in state */
+          <View style={styles.statusCard}>
+            <View style={styles.statusRow}>
+              <View style={[styles.statusDot, { backgroundColor: colors.success }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.statusTitle}>Connected</Text>
+                <Text style={styles.statusSub} numberOfLines={1}>{user.email}</Text>
+              </View>
+              <TouchableOpacity onPress={handleFeemoSignOut} style={styles.signOutBtn}>
                 <Text style={styles.signOutText}>Sign out</Text>
               </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Error message */}
-          {status === 'error' && errorMsg ? (
-            <View style={styles.errorBanner}>
-              <Text style={styles.errorText}>⚠ {errorMsg}</Text>
             </View>
-          ) : null}
 
-          {/* Loading indicator */}
-          {isBusy && (
-            <View style={styles.loadingRow}>
-              <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.loadingText}>{statusLabel[status]}</Text>
-            </View>
-          )}
-        </View>
+            {lastSync ? (
+              <Text style={[styles.statusSub, { marginTop: spacing.sm }]}>Last sync: {lastSync}</Text>
+            ) : null}
 
-        {/* Primary: Pull from Drive */}
-        <TouchableOpacity
-          style={[styles.primaryBtn, isBusy && styles.btnDisabled]}
-          onPress={handlePullFromDrive}
-          disabled={isBusy}
-          activeOpacity={0.8}
-        >
-          {status === 'pulling'
-            ? <ActivityIndicator color="#fff" size="small" />
-            : <Text style={styles.btnIcon}>☁️</Text>}
-          <View>
-            <Text style={styles.primaryBtnTitle}>
-              {isSignedIn ? 'Sync from Google Drive' : 'Connect Google Drive'}
-            </Text>
-            <Text style={styles.primaryBtnSub}>
-              {isSignedIn ? 'Pull latest .feemo file' : 'Sign in to get started'}
-            </Text>
+            {feemoError ? (
+              <View style={styles.errorBanner}>
+                <Text style={styles.errorText}>{feemoError}</Text>
+              </View>
+            ) : null}
+
+            {feemoSyncing ? (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={styles.loadingText}>Syncing…</Text>
+              </View>
+            ) : null}
           </View>
-        </TouchableOpacity>
+        ) : (
+          /* Sign-in form */
+          <View style={styles.statusCard}>
+            {/* Mode toggle */}
+            <View style={styles.modeToggle}>
+              <TouchableOpacity
+                style={[styles.modeBtn, mode === 'signin' && styles.modeBtnActive]}
+                onPress={() => { setMode('signin'); setFeemoError('') }}
+              >
+                <Text style={[styles.modeBtnText, mode === 'signin' && styles.modeBtnTextActive]}>Sign in</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modeBtn, mode === 'signup' && styles.modeBtnActive]}
+                onPress={() => { setMode('signup'); setFeemoError('') }}
+              >
+                <Text style={[styles.modeBtnText, mode === 'signup' && styles.modeBtnTextActive]}>Create account</Text>
+              </TouchableOpacity>
+            </View>
 
-        {/* Secondary: Push to Drive */}
-        {isSignedIn && (
+            <TextInput
+              style={styles.textInput}
+              placeholder="Email"
+              placeholderTextColor={colors.muted}
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              autoComplete="email"
+            />
+            <TextInput
+              style={[styles.textInput, { marginBottom: 0 }]}
+              placeholder={mode === 'signup' ? 'Password (min. 6 chars)' : 'Password'}
+              placeholderTextColor={colors.muted}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+            />
+
+            {feemoError ? (
+              <View style={[styles.errorBanner, { marginTop: spacing.sm }]}>
+                <Text style={styles.errorText}>{feemoError}</Text>
+              </View>
+            ) : null}
+          </View>
+        )}
+
+        {/* Primary action button */}
+        {!user ? (
           <TouchableOpacity
-            style={[styles.secondaryBtn, isBusy && styles.btnDisabled]}
-            onPress={handlePushToDrive}
-            disabled={isBusy}
+            style={[styles.primaryBtn, feemoSyncing && styles.btnDisabled]}
+            onPress={handleFeemoAuth}
+            disabled={feemoSyncing}
             activeOpacity={0.8}
           >
-            {status === 'pushing'
-              ? <ActivityIndicator color={colors.text} size="small" />
-              : <Text style={styles.btnIcon}>⬆️</Text>}
+            {feemoSyncing
+              ? <ActivityIndicator color="#fff" size="small" />
+              : <Text style={styles.btnIcon}>☁</Text>}
             <View>
-              <Text style={styles.secondaryBtnTitle}>Push to Google Drive</Text>
-              <Text style={styles.secondaryBtnSub}>Upload current changes</Text>
+              <Text style={styles.primaryBtnTitle}>
+                {mode === 'signin' ? 'Sign in to Feemo' : 'Create Feemo Account'}
+              </Text>
+              <Text style={styles.primaryBtnSub}>Real-time cloud sync</Text>
             </View>
           </TouchableOpacity>
+        ) : (
+          <>
+            <TouchableOpacity
+              style={[styles.primaryBtn, feemoSyncing && styles.btnDisabled]}
+              onPress={handleFeemoPull}
+              disabled={feemoSyncing}
+              activeOpacity={0.8}
+            >
+              {feemoSyncing
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Text style={styles.btnIcon}>⬇</Text>}
+              <View>
+                <Text style={styles.primaryBtnTitle}>Pull latest from desktop</Text>
+                <Text style={styles.primaryBtnSub}>Load most recent cloud state</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.secondaryBtn, feemoSyncing && styles.btnDisabled]}
+              onPress={handleFeemoPush}
+              disabled={feemoSyncing}
+              activeOpacity={0.8}
+            >
+              {feemoSyncing
+                ? <ActivityIndicator color={colors.text} size="small" />
+                : <Text style={styles.btnIcon}>⬆</Text>}
+              <View>
+                <Text style={styles.secondaryBtnTitle}>Push to cloud</Text>
+                <Text style={styles.secondaryBtnSub}>Save mobile changes to cloud</Text>
+              </View>
+            </TouchableOpacity>
+          </>
         )}
 
         {/* QR offline */}
@@ -243,8 +426,90 @@ export default function SyncScreen() {
           </View>
         </TouchableOpacity>
 
+        {/* ── GOOGLE DRIVE SECTION ─────────────────────────────────────────────── */}
+        <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Google Drive Sync</Text>
+
+        {/* Google Drive status card */}
+        <View style={styles.statusCard}>
+          <View style={styles.statusRow}>
+            <View style={[styles.statusDot, {
+              backgroundColor: isDriveSignedIn
+                ? (sync.lastSyncedAt ? colors.success : colors.primary)
+                : colors.warning,
+            }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.statusTitle}>
+                {isDriveSignedIn
+                  ? (sync.lastSyncedAt ? 'Google Drive connected' : 'Signed in — not yet synced')
+                  : 'Not connected to Google Drive'}
+              </Text>
+              <Text style={styles.statusSub}>
+                {isDriveSignedIn && sync.lastSyncedAt
+                  ? `Last sync: ${lastDriveSyncLabel}`
+                  : isDriveSignedIn
+                  ? 'Ready to sync'
+                  : 'Sign in to pull your desktop project'}
+              </Text>
+            </View>
+            {isDriveSignedIn && (
+              <TouchableOpacity onPress={handleDriveSignOut} style={styles.signOutBtn}>
+                <Text style={styles.signOutText}>Sign out</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {driveStatus === 'error' && driveError ? (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorText}>{driveError}</Text>
+            </View>
+          ) : null}
+
+          {isDriveBusy && (
+            <View style={styles.loadingRow}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.loadingText}>{driveStatusLabel[driveStatus]}</Text>
+            </View>
+          )}
+        </View>
+
+        <TouchableOpacity
+          style={[styles.primaryBtn, isDriveBusy && styles.btnDisabled]}
+          onPress={handlePullFromDrive}
+          disabled={isDriveBusy}
+          activeOpacity={0.8}
+        >
+          {driveStatus === 'pulling'
+            ? <ActivityIndicator color="#fff" size="small" />
+            : <Text style={styles.btnIcon}>☁️</Text>}
+          <View>
+            <Text style={styles.primaryBtnTitle}>
+              {isDriveSignedIn ? 'Sync from Google Drive' : 'Connect Google Drive'}
+            </Text>
+            <Text style={styles.primaryBtnSub}>
+              {isDriveSignedIn ? 'Pull latest .feemo file' : 'Sign in to get started'}
+            </Text>
+          </View>
+        </TouchableOpacity>
+
+        {isDriveSignedIn && (
+          <TouchableOpacity
+            style={[styles.secondaryBtn, isDriveBusy && styles.btnDisabled]}
+            onPress={handlePushToDrive}
+            disabled={isDriveBusy}
+            activeOpacity={0.8}
+          >
+            {driveStatus === 'pushing'
+              ? <ActivityIndicator color={colors.text} size="small" />
+              : <Text style={styles.btnIcon}>⬆️</Text>}
+            <View>
+              <Text style={styles.secondaryBtnTitle}>Push to Google Drive</Text>
+              <Text style={styles.secondaryBtnSub}>Upload current changes</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
         {/* How it works */}
-        <Text style={styles.sectionLabel}>How Sync Works</Text>
+        <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>How Google Drive Sync Works</Text>
 
         {WORKFLOW.map((step, i) => {
           const color = PLATFORM_COLORS[step.platform]
@@ -272,11 +537,10 @@ export default function SyncScreen() {
           )
         })}
 
-        {/* Setup notes */}
         {[
           { icon: '💡', title: 'Enable Drive on Desktop', body: 'Open Feemo → File screen → Save to Google Drive. Use the same Google account on both devices.' },
-          { icon: '🔑', title: 'First-time setup', body: 'Tap "Connect Google Drive" above. You\'ll be asked to approve access to your Drive — only .feemo files are ever touched.' },
-        ].map(n => (
+          { icon: '🔑', title: 'First-time setup', body: "Tap \"Connect Google Drive\" above. You'll be asked to approve access to your Drive — only .feemo files are ever touched." },
+        ].map((n) => (
           <View key={n.title} style={styles.noteCard}>
             <Text style={styles.noteIcon}>{n.icon}</Text>
             <View style={{ flex: 1 }}>
@@ -329,6 +593,39 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   loadingText: { color: colors.muted, fontSize: font.xs },
+
+  modeToggle: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: 3,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  modeBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: radius.sm,
+  },
+  modeBtnActive: {
+    backgroundColor: colors.card,
+  },
+  modeBtnText: { color: colors.muted, fontSize: font.xs, fontWeight: '600' },
+  modeBtnTextActive: { color: colors.text },
+
+  textInput: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    color: colors.text,
+    fontSize: font.sm,
+    marginBottom: spacing.sm,
+  },
 
   primaryBtn: {
     backgroundColor: colors.primary,
